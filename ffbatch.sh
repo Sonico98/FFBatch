@@ -4,17 +4,23 @@
 # Options #
 ###########
 # Set the video codec, pixel format, bitrate, etc
-video_params='-c:v libx264 -crf 20 -pix_fmt yuv420p -profile:v high -bf 2 -tune animation'
+video_params='-map 0:v:0 -c:v libx264 -crf 20 -pix_fmt yuv420p -profile:v high -bf 2 -tune animation'
 
 # Set the audio codec and bitrate. Will be ignored if the source's codec is AAC
-audio_params='-c:a libfdk_aac -b:a 350k' 
+audio_params='-map 0:a:0 -c:a libfdk_aac -profile:a aac_low -vbr 5' 
 
 # Optional parameters
 other_params='-movflags -faststart -metadata title= '
 
-# Enable or disable copying the file to RAM before transcoding
+# Enable or disable transcoding with RAM
 # MAKE SURE YOU HAVE ENOUGH SPACE
+# --------------------------------------
+# If true, copies the original file to ram
 copy2ram=false
+# If true, writes the transcoded file to ram before
+# moving it to its final destination
+write2ram=false
+# Determines the directory that points to RAM
 ramdir="/tmp"
 
 
@@ -42,7 +48,7 @@ check_audio_transcode () {
 		stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$ramdir"/"$base".mkv)"
 
 	if [[ "$get_audio_codec" = aac ]]; then
-		audio_parameters='-c:a copy'
+		audio_parameters='-map 0:a:0 -c:a copy'
 	fi
 }
 
@@ -57,12 +63,25 @@ cleanup () {
 
 
 copy_to_ram () {
-	if [[ $copy2ram = true ]]; then
-		echo "Copying file to RAM, to minimize disk usage"
+	if [[ $copy2ram = true ]] && [[ $write2ram = true ]]; then
+		echo "Copying file to RAM, to minimize disk usage."
+		echo "The transcoded file will be written to RAM first."
 		cp -v "$video" "$ramdir"
+		outputdir="$ramdir"
+		status=$?
+	elif [[ $copy2ram = true ]] && [[ $write2ram = false ]]; then
+		echo "Copying file to RAM, to minimize disk usage."
+		cp -v "$video" "$ramdir"
+		outputdir="$1"
+		status=$?
+	elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
+		echo "The transcoded file will be written to RAM first."
+		outputdir="$ramdir"
+		ramdir="."
 		status=$?
 	else
 		ramdir="."
+		outputdir="$1"
 		status=0
 	fi
 }
@@ -75,7 +94,7 @@ extract_fonts () {
 	cd "$ramdir"/.fonts
 	ffmpeg -y -dump_attachment:t "" -i ../"$base".mkv &>/dev/null
 
-	mv * "$HOME"/.local/share/fonts/ffbatch_fonts
+	mv ./* "$HOME"/.local/share/fonts/ffbatch_fonts &>/dev/null
 	cd .. && rm -rf .fonts
 	cd "$work_dir"
 	# clear
@@ -103,8 +122,8 @@ for video in *.mkv; do
 	audio_parameters="$audio_params"
 	base=$(basename "$video" .mkv)
 
-	# Copy the file to RAM (or not)
-	copy_to_ram
+	# Check if we want to work with files on RAM
+	copy_to_ram "$1"
 	mkdir -p "$ramdir"/subs
 
 	# If there were no problems copying to RAM, proceed
@@ -126,20 +145,23 @@ for video in *.mkv; do
 		if [[ $subs_state -eq 0 ]]; then
 			echo "Subtitles extracted. Transcoding..."
 			$ffbin -i "$ramdir"/"$base".mkv  -vf "ass='$ramdir/subs/$base.ass'" \
-				$audio_parameters $video_params $other_params "$ramdir"/"$base".mp4
+				$audio_parameters $video_params $other_params "$outputdir"/"$base".mp4
 		else
 			echo "No subtitles found. Converting to MP4 anyways..."
 			$ffbin -i "$ramdir"/"$base".mkv $audio_parameters \
-				$video_params $other_params "$ramdir"/"$base".mp4
+				$video_params $other_params "$outputdir"/"$base".mp4
 		fi
 
-		# Remove the mkv from RAM
+		# Remove the mkv from RAM and move the MP4
 		if [[ ! $ramdir = "." ]];then
 			rm -f "$ramdir"/"$base".mkv
+			if [[ $write2ram = true ]]; then
+				mv "$ramdir"/"$base".mp4 "$1"/"$base".mp4 &
+			fi
+		elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
+			mv "$outputdir"/"$base".mp4 "$1"/"$base".mp4 &
 		fi
 
-		# Move the MP4 to its final destination
-		mv "$ramdir"/"$base".mp4 "$1"/"$base".mp4 &
 	else
 		echo "An error ocurred"
 		cleanup
