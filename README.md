@@ -38,6 +38,6 @@ You can ignore any of those 3 and use ffmpeg's defaults by commenting them (addi
 ```ramdir```: Sets the RAM directory, ```/tmp``` by default. For myself, I setup a zram device on ```/zram``` and use that dir: ```ramdir="/zram"```
 
 # TO-DO
-- [ ] Encode the MP4 directly into the output_path if moving to RAM is disabled.
+- [X] Encode the MP4 directly into the output_path if moving to RAM is disabled.
 - [ ] Check available space before moving files to RAM, and transcode in place if there's not enough space.
 - [ ] Handle terminating the script properly, by cleaning up everything if Ctrl+C is received.
