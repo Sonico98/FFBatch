@@ -34,7 +34,8 @@ Simply open up the script in any text editor and modify the parameters at the to
 You can ignore any of those 3 and use ffmpeg's defaults by commenting them (adding a # to the start of the line)
 
 **MOVING TO RAM DOES NOT CHECK FOR AVAILABLE SPACE** (for now) <br />
-```copy2ram```: enables or disables copying the MKVs to RAM before transcoding. It's useful to minimize reads and writes on the disk, and it may improve performance (untested). It moves a single MKV to RAM, creates the MP4 on RAM as well, and after encoding is done, moves the MP4 away and removes the MKV from RAM, then repeats. <br />
+```copy2ram```: enables or disables copying the MKVs to RAM before transcoding. It's useful to minimize reads and writes on the disk, and it may improve performance (untested). It moves a single MKV to RAM, creates the encode using the file on RAM, and after encoding is done, removes the MKV from RAM, then repeats. <br />
+```write2ram```: enables or disables writing the output MP4 to RAM before copying it to disk. Useful for fragmented file systems (like BTRFS), as the resulting file will be written to disk at once when the transcode finishes. Just like the ```copy2ram``` option, it writes a single file to RAM first, moves it to disk once it finishes, and repeats.
 ```ramdir```: Sets the RAM directory, ```/tmp``` by default. For myself, I setup a zram device on ```/zram``` and use that dir: ```ramdir="/zram"```
 
 # TO-DO
