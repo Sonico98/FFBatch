@@ -16,10 +16,10 @@ other_params='-movflags -faststart -metadata title= '
 # MAKE SURE YOU HAVE ENOUGH SPACE
 # --------------------------------------
 # If true, copies the original file to ram
-copy2ram=false
+copy2ram=true
 # If true, writes the transcoded file to ram before
 # moving it to its final destination (reduces disk fragmentation)
-write2ram=false
+write2ram=true
 # Determines the directory that points to RAM
 ramdir="/tmp"
 
@@ -87,12 +87,10 @@ copy_to_ram () {
 	if [[ $copy2ram = true ]] && [[ $write2ram = true ]]; then
 		echo "$copy_info_text"
 		echo "$transcode_info_text"
-		cp -v "$video" "$ramdir"
 		outputdir="$ramdir"
 		status=$?
 	elif [[ $copy2ram = true ]] && [[ $write2ram = false ]]; then
 		echo "$copy_info_text"
-		cp -v "$video" "$ramdir"
 		outputdir="$1"
 		status=$?
 	elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
@@ -141,6 +139,10 @@ mkdir -p "$1"
 copy_to_ram "$1"
 
 for video in *.mkv; do
+	if [[ $copy2ram = true ]]; then
+		cp -v "$video" "$ramdir"
+	fi
+
 	VID_TRANSCODED=true
 	audio_parameters="$audio_params"
 	base=$(basename "$video" .mkv)
