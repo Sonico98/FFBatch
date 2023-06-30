@@ -16,10 +16,10 @@ other_params='-movflags -faststart -metadata title= '
 # MAKE SURE YOU HAVE ENOUGH SPACE
 # --------------------------------------
 # If true, copies the original file to ram
-copy2ram=true
+copy2ram=false
 # If true, writes the transcoded file to ram before
 # moving it to its final destination (reduces disk fragmentation)
-write2ram=true
+write2ram=false
 # Determines the directory that points to RAM
 ramdir="/tmp"
 
