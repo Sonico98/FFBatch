@@ -1,5 +1,5 @@
 # FFBatch
-Simple script to convert a folder of MKVs to MP4. It's made mostly with Anime in mind, and is by no means bulletproof.
+Simple script to convert a folder of MKVs to MP4 with hardsubs. It's made mostly with Anime in mind, and is by no means bulletproof.
 
 # Dependencies
 For the script to work, you'll just need
@@ -26,7 +26,7 @@ Run the script from within the folder with your MKV files, and indicate where to
 
 # Customization
 The default settings will create high quality, highly compatible MP4 videos. You can, however, easily pass your own ffmpeg parameters to customize your output.
-Simply open up the script in any text editor and modify the parameters at the top of the file, just be careful to not remove the quotes. <br />
+If you want your parameters to be permanent, simply open up the script in any text editor and modify the parameters at the top of the file, just be careful to not remove the quotes. Otherwise, you can control what the script will do with parameters (they override the constants set at the top of the file). Check --help<br />
 
 ```video_params```: Set the video codec, pixel format, bitrate, etc. <br />
 ```audio_params```: Set the audio codec and bitrate. Will be ignored if the source's codec is AAC. <br />
@@ -43,4 +43,4 @@ You can ignore any of those 3 and use ffmpeg's defaults by commenting them (addi
 # TO-DO
 - [X] Encode the MP4 directly into the output_path if moving to RAM is disabled.
 - [ ] Check available space before moving files to RAM, and transcode in place if there's not enough space.
-- [ ] Handle terminating the script properly, by cleaning up everything if Ctrl+C is received.
+- [X] Handle terminating the script properly, by cleaning up everything if Ctrl+C is received.
