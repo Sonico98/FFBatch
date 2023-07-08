@@ -16,10 +16,10 @@ other_params='-movflags -faststart -metadata title= '
 # MAKE SURE YOU HAVE ENOUGH SPACE
 # --------------------------------------
 # If true, copies the original file to ram
-copy2ram=true
+copy2ram=false
 # If true, writes the transcoded file to ram before
 # moving it to its final destination (reduces disk fragmentation)
-write2ram=true
+write2ram=false
 # Determines the directory that points to RAM
 ramdir="/tmp"
 
@@ -36,20 +36,133 @@ always_transcode=false
 ##########
 # Don't modify anything below unless you know what you're doing
 
-if [[ $# -ne 1 ]]
-then
-	echo "[ USAGE ]"
+print_usage () {
+	echo "[USAGE]"
+	echo "ffbatch.sh [OPTIONS] <output path>"
+	echo ""
 	echo "Execute the script inside a folder with a bunch of MKVs"
+	echo "You have to specify an output path where the encoded files will be placed"
+	echo "If copying or writing to RAM, make sure you have enough space for the files"
 	echo ""
-	echo "ffbatch.sh [output path]"
-	echo ""
-	echo "You have to specify where to place the encoded files"
-	echo "The script only accepts one parameter"
+	echo "[OPTIONS]"
+	echo " -c | --copy2ram        : Copies each MKV to RAM before transcoding, reducing reads from disk"
+	echo " -w | --write2ram       : Writes the MP4 to RAM before moving it to its final destination,"
+	echo "                          reducing writes to disk and fragmentation"
+	echo " -d | --ramdir <dir>    : Sets the temporary directory to copy the files to if -c or -w is used"
+	echo " -f | --force           : Always transcodes the video, even if no subtitles are found"
+	echo " -v | --videoParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded video"
+	echo " -a | --audioParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded audio"
+	echo " -p | --otherParams <p> : Pass your own miscellaneous ffmpeg parameters (in quotes)"
+	echo " -h | --help            : Print this help text"
+}
+
+if [[ $# -lt 1 ]]
+then
+	print_usage
 	exit 2
 fi
 
+# Process arguments
+while [ "$1" != "" ]; do
+	case "$1" in
+		-c | --copy2ram)
+			copy2ram=true
+			;;
+		-w | --write2ram)
+			write2ram=true
+			;;
+		-d | --ramdir)
+			shift
+			if [ -d "$1" ] && [ "$#" -ne 1 ]; then
+				ramdir="$1"
+			elif [ "$#" -eq 1 ]; then
+				echo "$0: No output path specified."
+				echo ""
+				print_usage >&2
+				exit 2
+			else
+				echo "$0: $1 is not a valid directory" >&2
+				exit 2
+			fi
+			echo
+			;;
+		-f | --force)
+			always_transcode=true
+			;;
+		-v | --videoParams)
+			shift
+			video_params="$1"
+			;;
+		-a | --audioParams)
+			shift
+			audio_params="$1"
+			;;
+		-p | --otherParams)
+			shift
+			other_params="$1"
+			;;
+		-h | --help)
+			print_usage
+			exit
+			;;
+		*)
+			if [ "$#" -eq 1 ]; then
+				if [ "$1" != "" ]; then
+					final_dir="$1"
+				else
+					echo "$0: No output path specified."
+					echo ""
+					print_usage >&2
+					exit 2
+				fi
+			else
+				echo "$0: '$1' invalid argument."
+				echo ""
+				print_usage >&2
+				exit 2
+			fi
+			;;
+	esac
+	shift
+done
 
 # Functions
+# https://stackoverflow.com/a/29310477
+expandPath() {
+	local path
+	local -a pathElements resultPathElements
+	IFS=':' read -r -a pathElements <<<"$1"
+	: "${pathElements[@]}"
+	for path in "${pathElements[@]}"; do
+		: "$path"
+		case $path in
+			"~+"/*)
+				path=$PWD/${path#"~+/"}
+				;;
+			"~-"/*)
+				path=$OLDPWD/${path#"~-/"}
+				;;
+			"~"/*)
+				path=$HOME/${path#"~/"}
+				;;
+			"~"*)
+				username=${path%%/*}
+				username=${username#"~"}
+				IFS=: read -r _ _ _ _ _ homedir _ < <(getent passwd "$username")
+				if [[ $path = */* ]]; then
+					path=${homedir}/${path#*/}
+				else
+					path=$homedir
+				fi
+				;;
+		esac
+		resultPathElements+=( "$path" )
+	done
+	local result
+	printf -v result '%s:' "${resultPathElements[@]}"
+	printf '%s\n' "${result%:}"
+}
+
 check_audio_transcode () {
 	get_audio_codec="$(ffprobe -v error -select_streams a:0 -show_entries \
 		stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$ramdir"/"$base".mkv)"
@@ -91,7 +204,7 @@ copy_to_ram () {
 		status=$?
 	elif [[ $copy2ram = true ]] && [[ $write2ram = false ]]; then
 		echo "$copy_info_text"
-		outputdir="$1"
+		outputdir="$final_dir"
 		status=$?
 	elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
 		echo "$transcode_info_text"
@@ -100,7 +213,7 @@ copy_to_ram () {
 		status=$?
 	else
 		ramdir="."
-		outputdir="$1"
+		outputdir="$final_dir"
 		# Set subsdir to the current working directory
 		subsdir="$ramdir"
 		status=0
@@ -131,12 +244,13 @@ set_ffbin () {
 }
 # End functions
 
+final_dir=$(expandPath "$final_dir")
 FONTS_EXTRACTED=false
 set_ffbin
-mkdir -p "$1"
+mkdir -p "$final_dir"
 
 # Check if we want to work with files on RAM
-copy_to_ram "$1"
+copy_to_ram "$final_dir"
 
 for video in *.mkv; do
 	if [[ $copy2ram = true ]]; then
@@ -186,12 +300,12 @@ for video in *.mkv; do
 			rm -f "$ramdir"/"$base".mkv
 			if [[ $write2ram = true ]]; then
 				if [ $VID_TRANSCODED = true ]; then
-					mv "$ramdir"/"$base".mp4 "$1"/"$base".mp4 &
+					mv "$ramdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
 				fi
 			fi
 		elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
 			if [ $VID_TRANSCODED = true ]; then
-				mv "$outputdir"/"$base".mp4 "$1"/"$base".mp4 &
+				mv "$outputdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
 			fi
 		fi
 
