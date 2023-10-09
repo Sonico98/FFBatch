@@ -4,10 +4,10 @@
 # Options #
 ###########
 # Set the video codec, pixel format, bitrate, etc
-video_params='-map 0:v:0 -c:v libx264 -crf 20 -pix_fmt yuv420p -profile:v high -bf 2 -tune animation'
+video_params='-map 0:v:0 -c:v libx264 -crf 20 -pix_fmt yuv420p -profile:v high -bf 2 -tune animation -preset slow -x264opts aq-strength=1.2'
 
 # Set the audio codec and bitrate. Will be ignored if the source's codec is AAC
-audio_params='-map 0:a -map -0:a:m:language:eng? -map -0:a:m:language:spa? -c:a libfdk_aac -profile:a aac_low -vbr 5' 
+audio_params='-map 0:a:m:language:jpn? -c:a libfdk_aac -profile:a aac_low -vbr 5'
 
 # Optional parameters
 other_params='-movflags -faststart -metadata title= '
