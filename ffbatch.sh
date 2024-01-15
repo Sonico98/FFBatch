@@ -4,7 +4,7 @@
 # Options #
 ###########
 # Set the video codec, pixel format, bitrate, etc
-video_params='-map 0:v:0 -c:v libx264 -crf 20 -pix_fmt yuv420p -profile:v high -bf 2 -tune animation -preset slow -x264opts aq-strength=1.2'
+video_params='-map 0:v:0 -c:v libx264 -crf 19 -pix_fmt yuv420p -profile:v high -bf 2 -tune animation -preset slow -x264opts aq-strength=1.275 -level:v 4.2'
 
 # Set the audio codec and bitrate. Will be ignored if the source's codec is AAC
 audio_params='-map 0:a:m:language:jpn? -c:a libfdk_aac -profile:a aac_low -vbr 5'
@@ -275,7 +275,7 @@ for video in *.mkv; do
 		check_audio_transcode
 
 		echo "Attempting to extract subs..."
-		$(which ffmpeg) -v quiet -stats -y -i "$ramdir"/"$base".mkv "$subsdir"/.subs/"$base".ass
+		$(which ffmpeg) -v quiet -stats -y -i "$ramdir"/"$base".mkv -map 0:s:0 "$subsdir"/.subs/"$base".ass
 		subs_state="$?"
 
 		# Transcode the file
