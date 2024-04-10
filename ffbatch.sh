@@ -4,13 +4,23 @@
 # Options #
 ###########
 # Set the video codec, pixel format, bitrate, etc
-video_params='-map 0:v:0 -c:v libx264 -crf 19 -pix_fmt yuv420p -profile:v high -bf 2 -tune animation -preset slow -x264opts aq-strength=1.275 -level:v 4.2'
+video_params='-map 0:v:0 -c:v libx264 -crf 18 -pix_fmt yuv420p -profile:v high -bf 6 -tune animation -preset slow -aq-mode 3 -aq-strength 0.75 -rc-lookahead 80 -level:v 4.2'
 
 # Set the audio codec and bitrate. Will be ignored if the source's codec is AAC
-audio_params='-map 0:a:m:language:jpn? -c:a libfdk_aac -profile:a aac_low -vbr 5'
+audio_params='-c:a libfdk_aac -profile:a aac_low -vbr 5'
 
 # Optional parameters
-other_params='-movflags -faststart -metadata title= '
+other_params='-movflags faststart -metadata title= '
+
+# Set the subtitle language to burn into the video.
+# The subtitle stream should be properly tagged with the desired language code (e.g. using mkvtoolnix).
+# If there are multiple subtitles for the same language, the first one that matches will be chosen.
+subs_lang='eng'
+
+# Set the audio language to use.
+# The audio stream should be properly tagged with the desired language code (e.g. using mkvtoolnix).
+# If there are multiple audio streams for the same language, all of them will be transcoded.
+audio_lang='jpn'
 
 # Enable or disable transcoding with RAM
 # MAKE SURE YOU HAVE ENOUGH SPACE
@@ -53,6 +63,7 @@ print_usage () {
 	echo " -v | --videoParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded video"
 	echo " -a | --audioParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded audio"
 	echo " -p | --otherParams <p> : Pass your own miscellaneous ffmpeg parameters (in quotes)"
+	echo " -s | --subLang <lang>  : Try to burn subtitles matching a specific language code"
 	echo " -h | --help            : Print this help text"
 }
 
@@ -100,6 +111,14 @@ while [ "$1" != "" ]; do
 		-p | --otherParams)
 			shift
 			other_params="$1"
+			;;
+		-S | --subLang)
+			shift
+			subs_lang="$1"
+			;;
+		-A | --audioLang)
+			shift
+			audio_lang="$1"
 			;;
 		-h | --help)
 			print_usage
@@ -163,12 +182,40 @@ expandPath() {
 	printf '%s\n' "${result%:}"
 }
 
-check_audio_transcode () {
-	get_audio_codec="$(ffprobe -v error -select_streams a:0 -show_entries \
-		stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$ramdir"/"$base".mkv)"
 
-	if [[ "$get_audio_codec" = aac ]]; then
-		audio_parameters='-map 0:a -map -0:a:m:language:eng? -map -0:a:m:language:spa? -c:a copy'
+check_audio_transcode () {
+	stream="a:0"
+	if [ "$audiomap" != "-map 0:a:0" ]; then
+		stream="a:m:language:$audio_lang"
+	fi
+
+	get_audio_codec="$(ffprobe -v error -select_streams "$stream" -show_entries \
+		stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$ramdir"/"$base".mkv | tr -d '\n' | tr -d ' ')"
+
+	if [[ "$get_audio_codec" = "aac" ]]; then
+		audio_parameters="-map 0:$stream -c:a copy"
+	fi
+}
+
+
+select_audio_stream () {
+	audiomap="-map 0:a:0"
+	audio_exists="$(ffprobe -i "$ramdir"/"$base".mkv -hide_banner -v quiet -show_streams -select_streams a:m:language:"$audio_lang")"
+	if [ -n "$audio_exists" ]; then
+		audiomap="-map 0:a:m:language:$audio_lang"
+	else
+		echo "The requested audio language could not be found. Picking the first audio track available."
+	fi
+}
+
+# Code reuse? What's that?
+select_subs_stream () {
+	submap="-map 0:s:0"
+	subs_exists="$(ffprobe -i "$ramdir"/"$base".mkv -hide_banner -v quiet -show_streams -select_streams s:m:language:"$subs_lang")"
+	if [ -n "$subs_exists" ]; then
+		submap="-map 0:s:m:language:$subs_lang"
+	else
+		echo "The requested subtitle language could not be found. Picking the first subtitle track available."
 	fi
 }
 
@@ -242,6 +289,41 @@ set_ffbin () {
 		ffbin=$(which ffmpeg)
 	fi
 }
+
+
+transcode () {
+	if [[ $subs_state -eq 0 ]]; then
+		echo "Subtitles extracted. Transcoding..."
+		$ffbin -i "$ramdir"/"$base".mkv -vf "subtitles='$subsdir/.subs/$base.ass:fontsdir=$ramdir/.fonts'" \
+			$audio_parameters $video_params $other_params "$outputdir"/"$base".mp4
+	else
+		if [ $always_transcode = true ]; then
+			echo "No subtitles found. Converting to MP4 anyways..."
+			$ffbin -i "$ramdir"/"$base".mkv $audio_parameters \
+				$video_params $other_params "$outputdir"/"$base".mp4
+		else
+			echo "No subtitles found. Skipping file..."
+			echo ""
+			VID_TRANSCODED=false
+		fi
+	fi
+}
+
+
+move2final_dest () {
+	if [[ ! $ramdir = "." ]];then
+		rm -f "$ramdir"/"$base".mkv
+		if [[ $write2ram = true ]]; then
+			if [ $VID_TRANSCODED = true ]; then
+				mv "$ramdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
+			fi
+		fi
+	elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
+		if [ $VID_TRANSCODED = true ]; then
+			mv "$outputdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
+		fi
+	fi
+}
 # End functions
 
 final_dir=$(expandPath "$final_dir")
@@ -271,43 +353,25 @@ for video in *.mkv; do
 			FONTS_EXTRACTED=true
 		fi
 
+		# Try to select the subtitle language
+		select_subs_stream
+
+		# Try to select the audio language
+		select_audio_stream
+
 		# Determine if transcoding the audio is necessary
 		check_audio_transcode
 
-		echo "Attempting to extract subs..."
-		$(which ffmpeg) -v quiet -stats -y -i "$ramdir"/"$base".mkv -map 0:s:0 "$subsdir"/.subs/"$base".ass
+		echo "Trying to extract subs..."
+		$(which ffmpeg) -v quiet -y -i "$ramdir"/"$base".mkv $submap -f matroska - | \
+			$(which ffmpeg) -v quiet -stats -i - -map 0:s:0 "$subsdir"/.subs/"$base".ass
 		subs_state="$?"
 
 		# Transcode the file
-		if [[ $subs_state -eq 0 ]]; then
-			echo "Subtitles extracted. Transcoding..."
-			$ffbin -i "$ramdir"/"$base".mkv -vf "subtitles='$subsdir/.subs/$base.ass:fontsdir=$ramdir/.fonts'" \
-				$audio_parameters $video_params $other_params "$outputdir"/"$base".mp4
-		else
-			if [ $always_transcode = true ]; then
-				echo "No subtitles found. Converting to MP4 anyways..."
-				$ffbin -i "$ramdir"/"$base".mkv $audio_parameters \
-					$video_params $other_params "$outputdir"/"$base".mp4
-			else
-				echo "No subtitles found. Skipping file..."
-				echo ""
-				VID_TRANSCODED=false
-			fi
-		fi
+		transcode
 
 		# Remove the mkv from RAM and move the MP4
-		if [[ ! $ramdir = "." ]];then
-			rm -f "$ramdir"/"$base".mkv
-			if [[ $write2ram = true ]]; then
-				if [ $VID_TRANSCODED = true ]; then
-					mv "$ramdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
-				fi
-			fi
-		elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
-			if [ $VID_TRANSCODED = true ]; then
-				mv "$outputdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
-			fi
-		fi
+		move2final_dest
 
 		if [[ $always_ex_fonts = true ]]; then
 			rm -rf "$ramdir"/.fonts
