@@ -194,6 +194,8 @@ check_audio_transcode () {
 
 	if [[ "$get_audio_codec" = "aac" ]]; then
 		audio_parameters="-map 0:$stream -c:a copy"
+	else
+		audio_parameters="$audio_params -map 0:$stream"
 	fi
 }
 
@@ -340,7 +342,6 @@ for video in *.mkv; do
 	fi
 
 	VID_TRANSCODED=true
-	audio_parameters="$audio_params"
 	base=$(basename "$video" .mkv)
 
 	mkdir -p "$subsdir"/.subs
@@ -363,8 +364,8 @@ for video in *.mkv; do
 		check_audio_transcode
 
 		echo "Trying to extract subs..."
-		$(which ffmpeg) -v quiet -y -i "$ramdir"/"$base".mkv $submap -f matroska - | \
-			$(which ffmpeg) -v quiet -stats -i - -map 0:s:0 "$subsdir"/.subs/"$base".ass
+		 $(which ffmpeg) -v quiet -y -i "$ramdir"/"$base".mkv $submap -f matroska - | \
+		 	$(which ffmpeg) -v quiet -stats -i - -map 0:s:0 "$subsdir"/.subs/"$base".ass
 		subs_state="$?"
 
 		# Transcode the file
