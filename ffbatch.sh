@@ -63,7 +63,8 @@ print_usage () {
 	echo " -v | --videoParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded video"
 	echo " -a | --audioParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded audio"
 	echo " -p | --otherParams <p> : Pass your own miscellaneous ffmpeg parameters (in quotes)"
-	echo " -s | --subLang <lang>  : Try to burn subtitles matching a specific language code"
+	echo " -S | --subLang <lang>  : Try to burn subtitles matching a specific language code"
+	echo " -A | --audioLang <lang>: Try to encode audio tracks matching a specific language code"
 	echo " -h | --help            : Print this help text"
 }
 
