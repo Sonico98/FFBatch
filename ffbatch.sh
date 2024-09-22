@@ -22,23 +22,19 @@ subs_lang='eng'
 # If there are multiple audio streams for the same language, all of them will be transcoded.
 audio_lang='jpn'
 
-# Enable or disable transcoding with RAM
-# MAKE SURE YOU HAVE ENOUGH SPACE
-# --------------------------------------
-# If true, copies the original file to ram
-copy2ram=false
-# If true, writes the transcoded file to ram before
-# moving it to its final destination (reduces disk fragmentation)
-write2ram=false
-# Determines the directory that points to RAM
-ramdir="/tmp"
-
-# Always extract fonts
-# May be useful if the resulting videos are using the wrong fonts
-always_ex_fonts=true
-
 # Transcode even if no subs are found
 always_transcode=false
+
+# Enable or disable transcoding in a temp directory 
+# --------------------------------------
+# If true, copies the original file to a temp directory
+# (can be useful for network shares)
+copy2dir=false
+# If true, writes the transcoded file to a temp directory before
+# moving it to its final destination (can be useful for network shares)
+write2dir=false
+# Determines the temp directory to use. Won't be removed on completion.
+tmpdir="/tmp"
 
 
 ##########
@@ -52,20 +48,21 @@ print_usage () {
 	echo ""
 	echo "Execute the script inside a folder with a bunch of MKVs"
 	echo "You have to specify an output path where the encoded files will be placed"
-	echo "If copying or writing to RAM, make sure you have enough space for the files"
 	echo ""
 	echo "[OPTIONS]"
-	echo " -c | --copy2ram        : Copies each MKV to RAM before transcoding, reducing reads from disk"
-	echo " -w | --write2ram       : Writes the MP4 to RAM before moving it to its final destination,"
-	echo "                          reducing writes to disk and fragmentation"
-	echo " -d | --ramdir <dir>    : Sets the temporary directory to copy the files to if -c or -w is used"
-	echo " -f | --force           : Always transcodes the video, even if no subtitles are found"
-	echo " -v | --videoParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded video"
-	echo " -a | --audioParams <p> : Pass your own ffmpeg parameters (in quotes) related to the transcoded audio"
-	echo " -p | --otherParams <p> : Pass your own miscellaneous ffmpeg parameters (in quotes)"
-	echo " -S | --subLang <lang>  : Try to burn subtitles matching a specific language code"
-	echo " -A | --audioLang <lang>: Try to encode audio tracks matching a specific language code"
-	echo " -h | --help            : Print this help text"
+	echo " -l | --list <file>     : Lists available subtitles for a certain file with their stream number, language and name."
+	echo " -c | --copy2dir        : Copies each MKV to a temporary directory before transcoding (default is '/tmp')"
+	echo " -w | --write2dir       : Writes the MP4 to a temporary directory before moving it to its final destination"
+	echo "                          (default is '/tmp')."
+	echo " -d | --tmpdir <dir>    : Changes the temporary directory to copy the files to if -c or -w is used."
+	echo " -f | --force           : Always transcodes the video, even if no subtitles are found."
+	echo " -v | --videoParams <p> : Pass your own ffmpeg parameters (in quotes) for transcoding the video."
+	echo " -a | --audioParams <p> : Pass your own ffmpeg parameters (in quotes) for transcoding the audio."
+	echo " -p | --otherParams <p> : Pass your own miscellaneous ffmpeg parameters (in quotes)."
+	echo " -S | --subLang <lang>  : Try to burn subtitles matching a specific language code."
+	echo " -N | --subName <name>  : Try to burn subtitles matching a specific name. Check available names with -l. Overrides -S"
+	echo " -A | --audioLang <lang>: Try to encode audio tracks matching a specific language code."
+	echo " -h | --help            : Print this help text."
 }
 
 if [[ $# -lt 1 ]]
@@ -74,21 +71,256 @@ then
 	exit 2
 fi
 
+
+# Functions
+
+check_audio_transcode () {
+	stream="a:0"
+	if [ "$audiomap" != "-map 0:a:0" ]; then
+		stream="a:m:language:$audio_lang"
+	fi
+
+	get_audio_codec="$(ffprobe -v error -select_streams "$stream" -show_entries \
+		stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$tmpdir"/"$base".mkv | tr -d '\n' | tr -d ' ')"
+
+	if [[ "$get_audio_codec" = "aac" ]]; then
+		audio_parameters="-map 0:$stream -c:a copy"
+	else
+		audio_parameters="$audio_params -map 0:$stream"
+	fi
+}
+
+
+select_audio_stream () {
+	audiomap="-map 0:a:0"
+	audio_exists="$(ffprobe -i "$tmpdir"/"$base".mkv -hide_banner -v quiet -show_streams -select_streams a:m:language:"$audio_lang")"
+	if [ -n "$audio_exists" ]; then
+		audiomap="-map 0:a:m:language:$audio_lang"
+	else
+		echo "The requested audio language could not be found. Picking the first audio track available."
+	fi
+}
+
+
+list_subs () {
+	# TODO)) Possibly rewrite as a regular expression, to not rely on the "title" metadata being always 2 lines after the subtitle stream number
+	ffprobe -i "$1" 2>&1 | grep -A 2 "Subtitle" | cut -d':' -f2 | awk 1 ORS=' ' | sed -e "s# -- #\n#g" -e "s#)   #) · #g"
+}
+
+
+get_sub_index_by_name () {
+	list_subs "$tmpdir/$base.mkv" | grep -i "$subname" | cut -d "(" -f1 | tr -d "\n"
+}
+
+
+extract_subs () {
+	if [ -n "$subname" ]; then
+		subs_index="$(get_sub_index_by_name)"
+	else
+		subs_exists="$(ffprobe -i "$tmpdir"/"$base".mkv -hide_banner -v quiet -show_streams -select_streams s:m:language:"$subs_lang")"
+	fi
+	if [ -n "$subs_exists" ] || [ -n "$subs_index" ]; then
+		echo "Extracting subs..."
+		if [ -n "$subname" ]; then
+			$(which ffmpeg) -v quiet -stats -i "$tmpdir/$base.mkv" -map 0:"$subs_index" "$subsdir/.subs/$base.ass"
+		else
+			# Use mkvmerge to prevent problems if there are PGS subs present.
+			# We grab an audio track too, to prevent the subtitles from weirdly desyncing themselves.
+			first_audio_track="$(mkvmerge --identify "$tmpdir/$base.mkv" | grep 'audio' | head -1 | cut -d' ' -f3 | tr -d ':')"
+			mkvmerge -o "$subsdir/.subs/$base.mkv" -D -a "$first_audio_track" --no-chapters -s "$subs_lang" "$tmpdir/$base.mkv"
+			$(which ffmpeg) -v quiet -stats -i "$subsdir/.subs/$base.mkv" -map 0:s:0 "$subsdir/.subs/$base.ass"
+			rm -f "$subsdir/.subs/$base.mkv"
+		fi
+	else
+		if [ -n "$subname" ]; then
+			echo "The requested subtitle name could not be found. Trying to pick the first subtitle track available."
+		else
+			echo "The requested subtitle language could not be found. Trying to pick the first subtitle track available."
+		fi
+		$(which ffmpeg) -v quiet -stats -i "$tmpdir/$base.mkv" -map 0:s:0 "$subsdir/.subs/$base.ass"
+	fi
+}
+
+
+cleanup () {
+	rm -rf "$subsdir"/.subs
+	rm -rf "$tmpdir"/.fonts
+	if [[ ! "$tmpdir" = "." ]];then
+		rm -f "$tmpdir/$base.mkv"
+	fi
+}
+
+
+# trap ctrl-c and call ctrl_c()
+trap ctrl_c INT
+ctrl_c () {
+	cleanup
+	rm -f "$outputdir"/"$base.mp4"
+	exit 2
+}
+
+
+check_if_copy_to_dir () {
+	# Set subsdir to the default
+	subsdir="$tmpdir"
+	copy_info_text="Copying file to dir '$tmpdir' before transcoding"
+	transcode_info_text="The transcoded file will be written to '$tmpdir' first."
+
+	if [[ $copy2dir = true ]] && [[ $write2dir = true ]]; then
+		echo "$copy_info_text"
+		echo "$transcode_info_text"
+		outputdir="$tmpdir"
+	elif [[ $copy2dir = true ]] && [[ $write2dir = false ]]; then
+		echo "$copy_info_text"
+		outputdir="$final_dir"
+	elif [[ $write2dir = true ]] && [[ $copy2dir = false ]]; then
+		echo "$transcode_info_text"
+		outputdir="$tmpdir"
+		tmpdir="."
+	else
+		tmpdir="."
+		outputdir="$final_dir"
+		# Set subsdir to the current working directory
+		subsdir="$tmpdir"
+	fi
+}
+
+
+extract_fonts () {
+	work_dir="$(pwd)"
+	echo "Extracting fonts..."
+	mkdir -p "$tmpdir"/.fonts
+	cd "$tmpdir"/.fonts || exit
+	ffmpeg -y -dump_attachment:t "" -i ../"$base".mkv &>/dev/null
+	cd "$work_dir" || exit
+}
+
+
+choose_ffbin () {
+	which ffpb &> /dev/null
+	if [[ $? -eq 0 ]]
+	then
+		ffbin=$(which ffpb)
+	else
+		ffbin=$(which ffmpeg)
+	fi
+}
+
+
+transcode () {
+	if [[ -f "$subsdir/.subs/$base.ass" ]]; then
+		echo "Subtitles extracted. Transcoding..."
+		$ffbin -i "$tmpdir"/"$base".mkv -vf "subtitles='$subsdir/.subs/$base.ass:fontsdir=$tmpdir/.fonts'" \
+			$audio_parameters $video_params $other_params "$outputdir"/"$base".mp4
+	else
+		if [ $always_transcode = true ]; then
+			echo "No subtitles found. Converting to MP4 anyways..."
+			$ffbin -i "$tmpdir"/"$base".mkv $audio_parameters \
+				$video_params $other_params "$outputdir"/"$base".mp4
+		else
+			echo "No subtitles found. Skipping file..."
+			echo ""
+		fi
+	fi
+}
+
+
+move2final_dest () {
+	if [[ ! $tmpdir = "." ]];then
+		rm -f "$tmpdir"/"$base".mkv
+		if [[ $write2dir = true ]]; then
+			if [ -f "$tmpdir/$base.mp4" ]; then
+				mv "$tmpdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
+			fi
+		fi
+	elif [[ $write2dir = true ]] && [[ $copy2dir = false ]]; then
+		if [ -f "$outputdir/$base.mp4" ]; then
+			mv "$outputdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
+		fi
+	fi
+}
+
+main () {
+	final_dir=$(realpath "$final_dir")
+	mkdir -p "$final_dir"
+	choose_ffbin
+
+	# Check if we want to work with files on a temp dir
+	check_if_copy_to_dir "$final_dir"
+
+	for video in *.mkv; do
+		if [[ $copy2dir = true ]]; then
+			cp -v "$video" "$tmpdir"
+			if ! [[ $? -eq 0 ]]; then
+				echo "An error ocurred while copying the video file to '$tmpdir'."
+				echo "Make sure you have read/write permissions"
+				cleanup
+				exit 1
+			fi
+		fi
+
+		base=$(basename "$video" .mkv)
+		mkdir -p "$subsdir"/.subs
+
+		echo ""	
+
+		# Extract fonts embedded in the mkv file. Ensures effects are rendered properly
+		extract_fonts
+		# Try to select the subtitle language
+		extract_subs
+		# Try to select the audio language
+		select_audio_stream
+		# Determine if transcoding the audio is necessary
+		check_audio_transcode
+		# Transcode the file
+		transcode
+		# Remove the mkv from the temp dir and move the MP4
+		move2final_dest
+		rm -rf "$tmpdir"/.fonts
+	done
+
+	cleanup
+	echo "All done!"
+	exit 0
+}
+# End functions
+#
 # Process arguments
+subname=""
 while [ "$1" != "" ]; do
 	case "$1" in
+		-l | --list)
+			shift
+			if [ -f "$1" ]; then
+				list_subs "$1"
+			elif [ "$#" -eq 0 ]; then
+				echo "$0: No file specified."
+				echo ""
+				print_usage >&2
+				exit 2
+			else
+				echo "$0: $1 is not a valid file" >&2
+				exit 2
+			fi
+			exit 0
+			;;
 		-c | --copy2ram)
-			copy2ram=true
+			copy2dir=true
 			;;
 		-w | --write2ram)
-			write2ram=true
+			write2dir=true
 			;;
 		-d | --ramdir)
 			shift
-			if [ -d "$1" ] && [ "$#" -ne 1 ]; then
-				ramdir="$1"
+			if [ -d "$1" ] && [ "$#" -gt 1 ]; then
+				tmpdir="$1"
 			elif [ "$#" -eq 1 ]; then
-				echo "$0: No output path specified."
+				echo "$0: No output directory specified."
+				echo ""
+				print_usage >&2
+				exit 2
+			elif [ "$#" -eq 0 ]; then
+				echo "$0: No temporary directory specified."
 				echo ""
 				print_usage >&2
 				exit 2
@@ -121,6 +353,10 @@ while [ "$1" != "" ]; do
 			shift
 			audio_lang="$1"
 			;;
+		-N | --subName)
+			shift
+			subname="$1"
+			;;
 		-h | --help)
 			print_usage
 			exit
@@ -146,247 +382,5 @@ while [ "$1" != "" ]; do
 	shift
 done
 
-# Functions
-# https://stackoverflow.com/a/29310477
-expandPath() {
-	local path
-	local -a pathElements resultPathElements
-	IFS=':' read -r -a pathElements <<<"$1"
-	: "${pathElements[@]}"
-	for path in "${pathElements[@]}"; do
-		: "$path"
-		case $path in
-			"~+"/*)
-				path=$PWD/${path#"~+/"}
-				;;
-			"~-"/*)
-				path=$OLDPWD/${path#"~-/"}
-				;;
-			"~"/*)
-				path=$HOME/${path#"~/"}
-				;;
-			"~"*)
-				username=${path%%/*}
-				username=${username#"~"}
-				IFS=: read -r _ _ _ _ _ homedir _ < <(getent passwd "$username")
-				if [[ $path = */* ]]; then
-					path=${homedir}/${path#*/}
-				else
-					path=$homedir
-				fi
-				;;
-		esac
-		resultPathElements+=( "$path" )
-	done
-	local result
-	printf -v result '%s:' "${resultPathElements[@]}"
-	printf '%s\n' "${result%:}"
-}
-
-
-check_audio_transcode () {
-	stream="a:0"
-	if [ "$audiomap" != "-map 0:a:0" ]; then
-		stream="a:m:language:$audio_lang"
-	fi
-
-	get_audio_codec="$(ffprobe -v error -select_streams "$stream" -show_entries \
-		stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$ramdir"/"$base".mkv | tr -d '\n' | tr -d ' ')"
-
-	if [[ "$get_audio_codec" = "aac" ]]; then
-		audio_parameters="-map 0:$stream -c:a copy"
-	else
-		audio_parameters="$audio_params -map 0:$stream"
-	fi
-}
-
-
-select_audio_stream () {
-	audiomap="-map 0:a:0"
-	audio_exists="$(ffprobe -i "$ramdir"/"$base".mkv -hide_banner -v quiet -show_streams -select_streams a:m:language:"$audio_lang")"
-	if [ -n "$audio_exists" ]; then
-		audiomap="-map 0:a:m:language:$audio_lang"
-	else
-		echo "The requested audio language could not be found. Picking the first audio track available."
-	fi
-}
-
-# Code reuse? What's that?
-select_subs_stream () {
-	submap="-map 0:s:0"
-	subs_exists="$(ffprobe -i "$ramdir"/"$base".mkv -hide_banner -v quiet -show_streams -select_streams s:m:language:"$subs_lang")"
-	if [ -n "$subs_exists" ]; then
-		submap="-map 0:s:m:language:$subs_lang"
-	else
-		echo "The requested subtitle language could not be found. Picking the first subtitle track available."
-	fi
-}
-
-
-cleanup () {
-	rm -rf "$subsdir"/.subs
-	rm -rf "$ramdir"/.fonts
-	if [[ ! "$ramdir" = "." ]];then
-		rm -f "$ramdir/$base.mkv"
-	fi
-}
-
-
-# trap ctrl-c and call ctrl_c()
-trap ctrl_c INT
-ctrl_c () {
-	cleanup
-	rm -f "$outputdir"/"$base.mp4"
-	exit 2
-}
-
-
-copy_to_ram () {
-	# Set subsdir to RAM
-	subsdir="$ramdir"
-	copy_info_text="Copying file to RAM ($ramdir), to minimize disk usage."
-	transcode_info_text="The transcoded file will be written to RAM first ($ramdir)."
-
-	if [[ $copy2ram = true ]] && [[ $write2ram = true ]]; then
-		echo "$copy_info_text"
-		echo "$transcode_info_text"
-		outputdir="$ramdir"
-		status=$?
-	elif [[ $copy2ram = true ]] && [[ $write2ram = false ]]; then
-		echo "$copy_info_text"
-		outputdir="$final_dir"
-		status=$?
-	elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
-		echo "$transcode_info_text"
-		outputdir="$ramdir"
-		ramdir="."
-		status=$?
-	else
-		ramdir="."
-		outputdir="$final_dir"
-		# Set subsdir to the current working directory
-		subsdir="$ramdir"
-		status=0
-	fi
-}
-
-
-extract_fonts () {
-	work_dir="$(pwd)"
-	echo "Extracting fonts..."
-	mkdir -p "$ramdir"/.fonts
-	cd "$ramdir"/.fonts
-	ffmpeg -y -dump_attachment:t "" -i ../"$base".mkv &>/dev/null
-
-	cd "$work_dir"
-	# clear
-}
-
-
-set_ffbin () {
-	which ffpb &> /dev/null
-	if [[ $? -eq 0 ]]
-	then
-		ffbin=$(which ffpb)
-	else
-		ffbin=$(which ffmpeg)
-	fi
-}
-
-
-transcode () {
-	if [[ $subs_state -eq 0 ]]; then
-		echo "Subtitles extracted. Transcoding..."
-		$ffbin -i "$ramdir"/"$base".mkv -vf "subtitles='$subsdir/.subs/$base.ass:fontsdir=$ramdir/.fonts'" \
-			$audio_parameters $video_params $other_params "$outputdir"/"$base".mp4
-	else
-		if [ $always_transcode = true ]; then
-			echo "No subtitles found. Converting to MP4 anyways..."
-			$ffbin -i "$ramdir"/"$base".mkv $audio_parameters \
-				$video_params $other_params "$outputdir"/"$base".mp4
-		else
-			echo "No subtitles found. Skipping file..."
-			echo ""
-			VID_TRANSCODED=false
-		fi
-	fi
-}
-
-
-move2final_dest () {
-	if [[ ! $ramdir = "." ]];then
-		rm -f "$ramdir"/"$base".mkv
-		if [[ $write2ram = true ]]; then
-			if [ $VID_TRANSCODED = true ]; then
-				mv "$ramdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
-			fi
-		fi
-	elif [[ $write2ram = true ]] && [[ $copy2ram = false ]]; then
-		if [ $VID_TRANSCODED = true ]; then
-			mv "$outputdir"/"$base".mp4 "$final_dir"/"$base".mp4 &
-		fi
-	fi
-}
-# End functions
-
-final_dir=$(expandPath "$final_dir")
-FONTS_EXTRACTED=false
-set_ffbin
-mkdir -p "$final_dir"
-
-# Check if we want to work with files on RAM
-copy_to_ram "$final_dir"
-
-for video in *.mkv; do
-	if [[ $copy2ram = true ]]; then
-		cp -v "$video" "$ramdir"
-	fi
-
-	VID_TRANSCODED=true
-	base=$(basename "$video" .mkv)
-
-	mkdir -p "$subsdir"/.subs
-
-	# If there were no problems copying to RAM, proceed
-	if [[ $status -eq 0 ]]; then
-		echo ""	
-		if [[ $FONTS_EXTRACTED = false ]]; then
-			extract_fonts
-			FONTS_EXTRACTED=true
-		fi
-
-		# Try to select the subtitle language
-		select_subs_stream
-
-		# Try to select the audio language
-		select_audio_stream
-
-		# Determine if transcoding the audio is necessary
-		check_audio_transcode
-
-		echo "Trying to extract subs..."
-		 $(which ffmpeg) -v quiet -y -i "$ramdir"/"$base".mkv $submap -f matroska - | \
-		 	$(which ffmpeg) -v quiet -stats -i - -map 0:s:0 "$subsdir"/.subs/"$base".ass
-		subs_state="$?"
-
-		# Transcode the file
-		transcode
-
-		# Remove the mkv from RAM and move the MP4
-		move2final_dest
-
-		if [[ $always_ex_fonts = true ]]; then
-			rm -rf "$ramdir"/.fonts
-			FONTS_EXTRACTED=false
-		fi
-
-	else
-		echo "An error ocurred"
-		cleanup
-		exit 1
-	fi
-done
-
-cleanup
-echo "All done!"
-exit 0
+# Execute
+main
