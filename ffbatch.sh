@@ -7,7 +7,7 @@
 video_params='-map 0:v:0 -c:v libx264 -crf 18 -pix_fmt yuv420p -profile:v high -bf 6 -tune animation -preset slow -aq-mode 3 -aq-strength 0.75 -rc-lookahead 80 -level:v 4.2'
 
 # Set the audio codec and bitrate. Will be ignored if the source's codec is AAC
-audio_params='-c:a libfdk_aac -profile:a aac_low -vbr 5'
+audio_params='-c:a aac -b:a 256k'
 
 # Optional parameters
 other_params='-movflags faststart -metadata title= '
@@ -241,6 +241,12 @@ move2final_dest () {
 }
 
 main () {
+	count=$(ls -1 *.mkv 2>/dev/null | wc -l)
+	if [ "$count" == 0 ]; then
+		echo "No files to transcode in this directory"
+		exit 1
+	fi
+
 	final_dir=$(realpath "$final_dir")
 	mkdir -p "$final_dir"
 	choose_ffbin
