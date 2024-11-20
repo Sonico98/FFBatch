@@ -4,7 +4,7 @@
 # Options #
 ###########
 # Set the video codec, pixel format, bitrate, etc
-video_params='-map 0:v:0 -c:v libx264 -crf 18 -pix_fmt yuv420p -profile:v high -bf 6 -tune animation -preset slow -aq-mode 3 -aq-strength 0.75 -rc-lookahead 80 -level:v 4.2'
+video_params='-map 0:v:0 -c:v libx264 -crf 17 -pix_fmt yuv420p -profile:v high -bf 6 -tune animation -preset slow -aq-mode 3 -aq-strength 0.75 -rc-lookahead 200 -level:v 4.2'
 
 # Set the audio codec and bitrate. Will be ignored if the source's codec is AAC
 audio_params='-c:a aac -b:a 256k'
@@ -57,11 +57,11 @@ print_usage () {
 	echo " -d | --tmpdir <dir>    : Changes the temporary directory to copy the files to if -c or -w is used."
 	echo " -f | --force           : Always transcodes the video, even if no subtitles are found."
 	echo " -v | --videoParams <p> : Pass your own ffmpeg parameters (in quotes) for transcoding the video."
-	echo " -a | --audioParams <p> : Pass your own ffmpeg parameters (in quotes) for transcoding the audio."
+	echo " -u | --audioParams <p> : Pass your own ffmpeg parameters (in quotes) for transcoding the audio."
 	echo " -p | --otherParams <p> : Pass your own miscellaneous ffmpeg parameters (in quotes)."
-	echo " -S | --subLang <lang>  : Try to burn subtitles matching a specific language code."
-	echo " -N | --subName <name>  : Try to burn subtitles matching a specific name. Check available names with -l. Overrides -S"
-	echo " -A | --audioLang <lang>: Try to encode audio tracks matching a specific language code."
+	echo " -s | --subLang <lang>  : Try to burn subtitles matching a specific language code."
+	echo " -n | --subName <name>  : Try to burn subtitles matching a specific name. Check available names with -l. Overrides -S"
+	echo " -a | --audioLang <lang>: Try to encode audio tracks matching a specific language code."
 	echo " -h | --help            : Print this help text."
 }
 
@@ -109,7 +109,14 @@ list_subs () {
 
 
 get_sub_index_by_name () {
-	list_subs "$tmpdir/$base.mkv" | grep -i "$subname" | cut -d "(" -f1 | tr -d "\n"
+	subs_total=$(list_subs "$tmpdir/$base.mkv" | grep -i "$subname")
+	if [ "$(echo "$subs_total" | wc -l)" -lt 2 ]; then
+		index="$(echo "$subs_total" | cut -d "(" -f1 | tr -d "\n")"
+	else
+		# TODO)) Allow choosing something other than the first matching subs
+		index="$(echo "$subs_total" | head -1 | cut -d "(" -f1 | tr -d "\n")"
+	fi
+	echo "$index"
 }
 
 
@@ -343,7 +350,7 @@ while [ "$1" != "" ]; do
 			shift
 			video_params="$1"
 			;;
-		-a | --audioParams)
+		-u | --audioParams)
 			shift
 			audio_params="$1"
 			;;
@@ -351,15 +358,15 @@ while [ "$1" != "" ]; do
 			shift
 			other_params="$1"
 			;;
-		-S | --subLang)
+		-s | --subLang)
 			shift
 			subs_lang="$1"
 			;;
-		-A | --audioLang)
+		-a | --audioLang)
 			shift
 			audio_lang="$1"
 			;;
-		-N | --subName)
+		-n | --subName)
 			shift
 			subname="$1"
 			;;
